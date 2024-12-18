@@ -23,18 +23,12 @@ SERVER_NAME = None
 
 # Global database connection, initialized when needed
 DB_CONNECTION = None
-
-# Function to establish a connection to the SQLite database, I used to love SQL.
-# Centralizing database access
-# Now using a global connection to avoid reopening it
 def get_db_connection():
     global DB_CONNECTION
     if DB_CONNECTION is None:
         DB_CONNECTION = sqlite3.connect('db/warnings.db')
     return DB_CONNECTION
 
-# Define role levels for permission checks, if it wants to work that is, it's a bit brain damaged
-# Mapping role levels to sets of role names, gangster shit
 ROLE_LEVELS = {
     1: {"Moderator", "Admin"},  # Level 1: Gang
     2: {"Admin"}                # Level 2: Kool Kids Klub
@@ -53,7 +47,7 @@ async def on_ready():
     global SERVER_NAME
     # When our shit VPS finally loads
     # Syncs the command tree with Discord and logs the bot's status, we don't fuck with cogs yet.
-    SERVER_NAME = bot.guilds[0].name  # Assuming the bot is in one server
+    SERVER_NAME = bot.guilds[0].name
     print(f'Logged in as {bot.user.name} in {SERVER_NAME}')
     try:
         synced = await bot.tree.sync()
@@ -90,6 +84,15 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
         else:
             await user.add_roles(role)
             await interaction.response.send_message(f"{user.mention} has been verified and given the {role.name} role.")
+            # Log the verification in the mod-actions channel with error handling
+            mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+            if mod_actions_channel:
+                try:
+                    await mod_actions_channel.send(f"{user.mention} was verified and given the {role.name} role by {interaction.user.mention}.")
+                except Exception as e:
+                    print(f"Failed to send message to mod-actions channel: {e}")
+            else:
+                print("Mod-actions channel not found.")
     else:
         await interaction.response.send_message("Verification role not found.", ephemeral=True)
 
@@ -103,28 +106,32 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason: s
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
 
+    print(f"Warn command triggered by {interaction.user.mention} for {user.mention} with reason: {reason}")
+
     conn = get_db_connection()
     cursor = conn.cursor()
+    print("Inserting warning into database...")
     cursor.execute('INSERT INTO warnings (user_id, reason) VALUES (?, ?)', (user.id, reason))
     conn.commit()
     conn.close()
+    print("Warning inserted into database.")
 
-    # Get server name
-    # Now using the global SERVER_NAME
-    # server_name = interaction.guild.name
+    # Defer the response to keep the interaction alive
+    await interaction.response.defer()
 
     # Try to send a DM to the user with the warning details
     try:
         await user.send(f"You have been warned in **{SERVER_NAME}** for: {reason}")
     except discord.Forbidden:
-        await interaction.response.send_message(f"Could not DM {user.mention}. They might have DMs disabled.", ephemeral=True)
+        await interaction.followup.send(f"Could not DM {user.mention}. They might have DMs disabled.")
 
     # Log the warning in the mod-actions channel
     mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
     if mod_actions_channel:
         await mod_actions_channel.send(f"{user.mention} was warned in {SERVER_NAME} for: {reason}")
 
-    await interaction.response.send_message(f"{user.mention} has been warned for: {reason}")
+    # Send the final response
+    await interaction.followup.send(f"{user.mention} has been warned for: {reason}")
 
 
 ## Show Warnings / Notes
