@@ -82,14 +82,13 @@ CREATE TABLE IF NOT EXISTS tickets (
 )
 ''')
 
-# Create the roles_backup table
+# Modify the roles_backup table to set user_id as a primary key
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS roles_backup (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
+    user_id INTEGER PRIMARY KEY,
     roles TEXT,
     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-)
+);
 ''')
 
 # Commit the changes and close the connection

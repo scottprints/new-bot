@@ -298,11 +298,17 @@ async def on_message(message):
     # Process commands if any
     await bot.process_commands(message)
 
-async def perform_mute(guild, user, channel):
+async def perform_mute(guild, user, channel, duration):
     # Ensure the bot has a higher role than the user
     bot_member = guild.get_member(bot.user.id)
     if bot_member.top_role <= user.top_role:
         await channel.send("I cannot mute a user with an equal or higher role than mine.")
+        return
+
+    # Check if the user already has the MUTED role
+    muted_role = discord.utils.get(guild.roles, id=MUTED_ROLE_ID)
+    if muted_role and muted_role.id in [role.id for role in user.roles]:
+        await channel.send(f"{user.mention} is already muted.")
         return
 
     # Save current roles and assign MUTED role
@@ -310,74 +316,40 @@ async def perform_mute(guild, user, channel):
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Check if the user already has a backup
-    cursor.execute('SELECT roles FROM roles_backup WHERE user_id = ?', (user.id,))
-    row = cursor.fetchone()
-
-    if row:
-        # Update existing entry
-        cursor.execute('UPDATE roles_backup SET roles = ? WHERE user_id = ?', (','.join(map(str, roles)), user.id))
-    else:
-        # Insert new entry
-        cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?)', (user.id, ','.join(map(str, roles))))
-
+    # Insert or update roles in the backup database
+    cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET roles=excluded.roles', (user.id, ','.join(map(str, roles))))
     conn.commit()
     conn.close()
 
-    muted_role = discord.utils.get(guild.roles, name="MUTED")
     if muted_role:
         await user.edit(roles=[muted_role])
-        await channel.send(f"{user.mention} has been muted.")
+        await channel.send(f"{user.mention} has been muted for {duration} seconds.")
+        await asyncio.sleep(duration)
+        # Re-fetch the user to ensure the context is correct
+        refreshed_user = guild.get_member(user.id)
+        if refreshed_user:
+            await unmute_user(guild, refreshed_user, channel)
+        else:
+            print(f"Failed to refresh user context for {user.mention}")
     else:
         await channel.send("MUTED role not found.")
 
-# ================================
-# ========== MUTE COMMAND ========
-# ================================
 
-@bot.tree.command(name="mute")
-@app_commands.describe(user="The user to mute", duration="Duration in seconds")
-async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
-    # Defer the response to keep the interaction alive
-    await interaction.response.defer()
-
-    # Perform mute operation
-    await perform_mute(interaction.guild, user, interaction.channel)
-
-    # Send confirmation message
-    await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
-
-    # Wait for the specified duration
-    await asyncio.sleep(duration)
-
-    # Unmute the user after the duration
-    await unmute(interaction, user)
-
-# ================================
-# ========= UNMUTE COMMAND =======
-# ================================
-
-@bot.tree.command(name="unmute")
-@app_commands.describe(user="The user to unmute")
-async def unmute(interaction: discord.Interaction, user: discord.Member):
-    # Check for required role level
-    if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-
-    # Defer the response to keep the interaction alive
-    await interaction.response.defer()
-
+# ============================================
+# ========== SCUFFED AUTOMUTE COMMAND ========
+# ============================================
+async def unmute_user(guild, user, channel):
     # Remove the MUTED role if the user has it
-    muted_role = discord.utils.get(interaction.guild.roles, name="MUTED")
+    muted_role = discord.utils.get(guild.roles, id=MUTED_ROLE_ID)
     if muted_role:
-        if muted_role in user.roles:
+        print(f"Checking MUTED role for {user.mention}: {muted_role.name}")  # Debugging output
+        if muted_role.id in [role.id for role in user.roles]:
             await user.remove_roles(muted_role)
-            await interaction.followup.send(f" {user.mention} unmuted.")
+            print(f"MUTED role removed from {user.mention}")  # Debugging output
         else:
-            await interaction.followup.send(f"{user.mention} does not have the MUTED role.")
+            print(f"{user.mention} does not have the MUTED role")  # Debugging output
     else:
-        await interaction.followup.send("MUTED role not found.")
+        print("MUTED role not found in guild roles")  # Debugging output
 
     # Retrieve and restore previous roles
     conn = get_db_connection()
@@ -386,13 +358,40 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     row = cursor.fetchone()
     conn.close()
 
-    if row:
-        role_ids = map(int, row[0].split(','))
-        roles = [discord.utils.get(interaction.guild.roles, id=role_id) for role_id in role_ids]
+    if row and row[0]:  # Check if roles are not empty
+        print(f"Restoring roles for {user.mention}: {row[0]}")  # Debugging output
+        role_ids = map(int, filter(None, row[0].split(',')))  # Filter out empty strings
+        roles = [discord.utils.get(guild.roles, id=role_id) for role_id in role_ids if role_id]
         await user.edit(roles=roles)
-        await interaction.followup.send(f"{user.mention} has been unmuted.")
+        await channel.send(f"{user.mention} has been unmuted and previous roles restored.")
     else:
-        await interaction.followup.send("No role backup found for this user.")
+        await channel.send(f"{user.mention} has been unmuted.")
+
+# ================================
+# ========== MUTE COMMAND ========
+# ================================
+
+@bot.tree.command(name="mute")
+@app_commands.describe(user="The user to mute", duration="Duration in seconds")
+async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
+    await interaction.response.defer()
+    await perform_mute(interaction.guild, user, interaction.channel, duration)
+    await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
+
+# ================================
+# ========= UNMUTE COMMAND =======
+# ================================
+
+@bot.tree.command(name="unmute")
+@app_commands.describe(user="The user to unmute")
+async def unmute(interaction: discord.Interaction, user: discord.Member):
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    await unmute_user(interaction.guild, user, interaction.channel)
+    await interaction.followup.send(f"{user.mention} has been unmuted.")
 
 @bot.event
 async def on_member_remove(member):
