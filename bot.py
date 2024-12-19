@@ -8,6 +8,10 @@ from discord import Embed
 import time
 from config import *
 import asyncio
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Load environment variables bruv
 load_dotenv()
@@ -40,16 +44,16 @@ async def has_required_role(context, required_level: int) -> bool:
 
 @bot.event
 async def on_ready():
+    logging.debug("Entering on_ready event")
     global SERVER_NAME
-    # When our shit VPS finally loads
-    # Syncs the command tree with Discord and logs the bot's status, we don't fuck with cogs yet.
     SERVER_NAME = bot.guilds[0].name
-    print(f'Logged in as {bot.user.name} in {SERVER_NAME}')
+    logging.info(f'Logged in as {bot.user.name} in {SERVER_NAME}')
     try:
         synced = await bot.tree.sync()
-        print(f"Synced {len(synced)} command(s)")
+        logging.info(f"Synced {len(synced)} command(s)")
     except Exception as e:
-        print(e)
+        logging.error(f"Error syncing commands: {e}")
+    logging.debug("Exiting on_ready event")
 
 # ================================
 # ======== TEST COMMAND =========
@@ -95,9 +99,9 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
                 try:
                     await mod_actions_channel.send(f"{user.mention} was verified and given the {role.name} role by {interaction.user.mention}.")
                 except Exception as e:
-                    print(f"Failed to send message to mod-actions channel: {e}")
+                    logging.error(f"Failed to send message to mod-actions channel: {e}")
             else:
-                print("Mod-actions channel not found.")
+                logging.warning("Mod-actions channel not found.")
             # Log the verification in the database
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -120,15 +124,15 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason: s
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
 
-    print(f"Warn command triggered by {interaction.user.mention} for {user.mention} with reason: {reason}")
+    logging.info(f"Warn command triggered by {interaction.user.mention} for {user.mention} with reason: {reason}")
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    print("Inserting warning into database...")
+    logging.info("Inserting warning into database...")
     cursor.execute('INSERT INTO warnings (user_id, reason, moderator_id) VALUES (?, ?, ?)', (user.id, reason, interaction.user.id))
     conn.commit()
     conn.close()
-    print("Warning inserted into database.")
+    logging.info("Warning inserted into database.")
 
     # Defer the response to keep the interaction alive
     await interaction.response.defer()
@@ -268,6 +272,7 @@ user_message_count = {}
 
 @bot.event
 async def on_message(message):
+    logging.debug(f"Received message from {message.author}: {message.content}")
     # Ignore messages from the bot itself
     if message.author == bot.user:
         return
@@ -284,11 +289,13 @@ async def on_message(message):
 
     # Check if user exceeds message limit
     if len(user_message_count[user_id]) > MESSAGE_LIMIT:
+        logging.info(f"User {message.author} exceeded message limit, muting...")
         await perform_mute(message.guild, message.author, message.channel, duration=MUTE_DURATION)
 
     # Check if multiple users are spamming
     spamming_users = [uid for uid, times in user_message_count.items() if len(times) > MESSAGE_LIMIT]
     if len(spamming_users) > SPAM_THRESHOLD:
+        logging.info("Multiple users spamming, enabling slow mode...")
         await message.channel.edit(slowmode_delay=SLOWMODE_DELAY)
 
     # Check if the message is in a channel with a preset message
@@ -297,31 +304,37 @@ async def on_message(message):
         last_time = last_message_time.get(message.channel.id, 0)
         # Check if cooldown time has passed since the last message
         if current_time - last_time > COOLDOWN_TIME:
+            logging.info(f"Sending preset message in channel {message.channel.id}")
             await message.channel.send(embed=PRESET_MESSAGES[message.channel.id])
             last_message_time[message.channel.id] = current_time
 
     # Process commands if any
     await bot.process_commands(message)
+    logging.debug(f"Processed message from {message.author}")
 
 # ================================
 # ====== SCUFFED AUTO MUTE =======
 # ================================
 
 async def perform_mute(guild, user, channel, duration):
+    logging.debug(f"Attempting to mute {user.mention} for {duration} seconds")
     # Ensure the bot has a higher role than the user
     bot_member = guild.get_member(bot.user.id)
     if bot_member.top_role <= user.top_role:
         await channel.send("I cannot mute a user with an equal or higher role than mine.")
+        logging.warning(f"Cannot mute {user.mention} due to role hierarchy")
         return
 
     # Check if the user already has the MUTED role
     muted_role = discord.utils.get(guild.roles, id=MUTED_ROLE_ID)
     if muted_role and muted_role.id in [role.id for role in user.roles]:
         await channel.send(f"{user.mention} is already muted.")
+        logging.info(f"{user.mention} is already muted")
         return
 
     # Save current roles and assign MUTED role
     roles = [role.id for role in user.roles if role != guild.default_role]
+    logging.debug(f"Saving roles for {user.mention}: {roles}")
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -333,32 +346,35 @@ async def perform_mute(guild, user, channel, duration):
     if muted_role:
         await user.edit(roles=[muted_role])
         await channel.send(f"{user.mention} has been muted for {duration} seconds.")
+        logging.info(f"{user.mention} has been muted for {duration} seconds")
         await asyncio.sleep(duration)
         # Re-fetch the user to ensure the context is correct
         refreshed_user = guild.get_member(user.id)
         if refreshed_user:
             await unmute_user(guild, refreshed_user, channel)
         else:
-            print(f"Failed to refresh user context for {user.mention}")
+            logging.warning(f"Failed to refresh user context for {user.mention}")
     else:
         await channel.send("MUTED role not found.")
+        logging.error("MUTED role not found")
 
 
 # ============================================
 # ========== SCUFFED AUTO UNMUTE =============
 # ============================================
 async def unmute_user(guild, user, channel):
+    logging.debug(f"Attempting to unmute {user.mention}")
     # Remove the MUTED role if the user has it
     muted_role = discord.utils.get(guild.roles, id=MUTED_ROLE_ID)
     if muted_role:
-        print(f"Checking MUTED role for {user.mention}: {muted_role.name}")  # Debugging output
+        logging.debug(f"Checking MUTED role for {user.mention}: {muted_role.name}")
         if muted_role.id in [role.id for role in user.roles]:
             await user.remove_roles(muted_role)
-            print(f"MUTED role removed from {user.mention}")  # Debugging output
+            logging.info(f"MUTED role removed from {user.mention}")
         else:
-            print(f"{user.mention} does not have the MUTED role")  # Debugging output
+            logging.info(f"{user.mention} does not have the MUTED role")
     else:
-        print("MUTED role not found in guild roles")  # Debugging output
+        logging.error("MUTED role not found in guild roles")
 
     # Retrieve and restore previous roles
     conn = get_db_connection()
@@ -368,13 +384,15 @@ async def unmute_user(guild, user, channel):
     conn.close()
 
     if row and row[0]:  # Check if roles are not empty
-        print(f"Restoring roles for {user.mention}: {row[0]}")  # Debugging output
+        logging.debug(f"Restoring roles for {user.mention}: {row[0]}")
         role_ids = map(int, filter(None, row[0].split(',')))  # Filter out empty strings
         roles = [discord.utils.get(guild.roles, id=role_id) for role_id in role_ids if role_id]
         await user.edit(roles=roles)
         await channel.send(f"{user.mention} has been unmuted and previous roles restored.")
+        logging.info(f"{user.mention} has been unmuted and previous roles restored")
     else:
         await channel.send(f"{user.mention} has been unmuted.")
+        logging.info(f"{user.mention} has been unmuted without previous roles")
 
 # ================================
 # ========== MUTE COMMAND ========
