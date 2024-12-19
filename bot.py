@@ -452,5 +452,22 @@ async def on_member_join(member):
         roles = [discord.utils.get(member.guild.roles, id=role_id) for role_id in role_ids]
         await member.add_roles(*roles)
 
+# ================================
+# ======== BOT DETAILS ==========
+# ================================
+
+@bot.tree.command(name="botinfo")
+async def bot_info(interaction: discord.Interaction):
+    # Calculate ping
+    ping = round(bot.latency * 1000)  # Convert to milliseconds
+    # Create an embed with bot details
+    embed = Embed(title="Bot Details", color=0x3498db)
+    embed.add_field(name="Bot Name", value=bot.user.name, inline=False)
+    embed.add_field(name="Bot ID", value=bot.user.id, inline=False)
+    embed.add_field(name="Ping", value=f"{ping} ms", inline=False)
+    embed.add_field(name="Server Name", value=SERVER_NAME, inline=False)
+    # Send the embed as a response
+    await interaction.response.send_message(embed=embed)
+
 # Run bot
 bot.run(TOKEN)
