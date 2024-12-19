@@ -316,8 +316,8 @@ async def on_message(message):
 # ====== SCUFFED AUTO MUTE =======
 # ================================
 
-async def perform_mute(guild, user, channel, duration):
-    logging.debug(f"Attempting to mute {user.mention} for {duration} seconds")
+async def perform_mute(guild, user, channel, duration, moderator, is_automatic=False):
+    logging.debug(f"Attempting to mute {user.mention} for {duration} seconds by {moderator.mention}")
     # Ensure the bot has a higher role than the user
     bot_member = guild.get_member(bot.user.id)
     if bot_member.top_role <= user.top_role:
@@ -345,19 +345,32 @@ async def perform_mute(guild, user, channel, duration):
 
     if muted_role:
         await user.edit(roles=[muted_role])
-        await channel.send(f"{user.mention} has been muted for {duration} seconds.")
         logging.info(f"{user.mention} has been muted for {duration} seconds")
-        await asyncio.sleep(duration)
-        # Re-fetch the user to ensure the context is correct
-        refreshed_user = guild.get_member(user.id)
-        if refreshed_user:
-            await unmute_user(guild, refreshed_user, channel)
-        else:
-            logging.warning(f"Failed to refresh user context for {user.mention}")
+        # Send a DM to the user
+        try:
+            await user.send(f"You have been muted in **{SERVER_NAME}** for {duration} seconds.")
+        except discord.Forbidden:
+            logging.warning(f"Could not send DM to {user.mention}. They might have DMs disabled.")
+        # Log the mute action in the mod-actions channel
+        mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+        if mod_actions_channel:
+            await mod_actions_channel.send(f"{user.mention} was muted for {duration} seconds by {moderator.mention}.")
+        # Send the mute message if it's an automatic mute
+        if is_automatic:
+            await channel.send(f"{user.mention} has been muted for {duration} seconds.")
+        # Run the unmute operation in the background
+        asyncio.create_task(unmute_after_delay(guild, user, channel, duration))
     else:
         await channel.send("MUTED role not found.")
         logging.error("MUTED role not found")
 
+async def unmute_after_delay(guild, user, channel, duration):
+    await asyncio.sleep(duration)
+    refreshed_user = guild.get_member(user.id)
+    if refreshed_user:
+        await unmute_user(guild, refreshed_user, channel)
+    else:
+        logging.warning(f"Failed to refresh user context for {user.mention}")
 
 # ============================================
 # ========== SCUFFED AUTO UNMUTE =============
@@ -394,6 +407,17 @@ async def unmute_user(guild, user, channel):
         await channel.send(f"{user.mention} has been unmuted.")
         logging.info(f"{user.mention} has been unmuted without previous roles")
 
+    # Send a DM to the user
+    try:
+        await user.send(f"You have been unmuted in **{SERVER_NAME}**.")
+    except discord.Forbidden:
+        logging.warning(f"Could not send DM to {user.mention}. They might have DMs disabled.")
+
+    # Log the unmute action in the mod-actions channel
+    mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+    if mod_actions_channel:
+        await mod_actions_channel.send(f"{user.mention} was unmuted by {bot.user.mention}.")
+
 # ================================
 # ========== MUTE COMMAND ========
 # ================================
@@ -402,7 +426,7 @@ async def unmute_user(guild, user, channel):
 @app_commands.describe(user="The user to mute", duration="Duration in seconds")
 async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
     await interaction.response.defer()
-    await perform_mute(interaction.guild, user, interaction.channel, duration)
+    await perform_mute(interaction.guild, user, interaction.channel, duration, interaction.user, is_automatic=False)
     await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
 
 # ================================
