@@ -284,7 +284,12 @@ async def on_message(message):
 
     # Check if user exceeds message limit
     if len(user_message_count[user_id]) > MESSAGE_LIMIT:
-        await perform_mute(message.guild, message.author, message.channel)
+        await perform_mute(message.guild, message.author, message.channel, duration=MUTE_DURATION)
+
+    # Check if multiple users are spamming
+    spamming_users = [uid for uid, times in user_message_count.items() if len(times) > MESSAGE_LIMIT]
+    if len(spamming_users) > SPAM_THRESHOLD:
+        await message.channel.edit(slowmode_delay=SLOWMODE_DELAY)
 
     # Check if the message is in a channel with a preset message
     if message.channel.id in PRESET_MESSAGES:
@@ -294,9 +299,13 @@ async def on_message(message):
         if current_time - last_time > COOLDOWN_TIME:
             await message.channel.send(embed=PRESET_MESSAGES[message.channel.id])
             last_message_time[message.channel.id] = current_time
-    
+
     # Process commands if any
     await bot.process_commands(message)
+
+# ================================
+# ====== SCUFFED AUTO MUTE =======
+# ================================
 
 async def perform_mute(guild, user, channel, duration):
     # Ensure the bot has a higher role than the user
@@ -336,7 +345,7 @@ async def perform_mute(guild, user, channel, duration):
 
 
 # ============================================
-# ========== SCUFFED AUTOMUTE COMMAND ========
+# ========== SCUFFED AUTO UNMUTE =============
 # ============================================
 async def unmute_user(guild, user, channel):
     # Remove the MUTED role if the user has it
@@ -393,6 +402,10 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     await unmute_user(interaction.guild, user, interaction.channel)
     await interaction.followup.send(f"{user.mention} has been unmuted.")
 
+# ================================
+# ========= ROLE BACKUP ==========
+# ================================
+
 @bot.event
 async def on_member_remove(member):
     # Save current roles when a user leaves
@@ -402,6 +415,10 @@ async def on_member_remove(member):
     cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET roles=excluded.roles', (member.id, ','.join(map(str, roles))))
     conn.commit()
     conn.close()
+
+# ================================
+# ========= ROLE RESTORE =========
+# ================================
 
 @bot.event
 async def on_member_join(member):

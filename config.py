@@ -23,3 +23,8 @@ MESSAGE_LIMIT = 5  # Number of messages allowed
 TIME_WINDOW = 10  # Time window in seconds
 
 MUTED_ROLE_ID = 1319116489554399273
+
+# Configuration variables
+MUTE_DURATION = 60  # Default mute duration in seconds
+SLOWMODE_DELAY = 10  # Slow mode delay in seconds
+SPAM_THRESHOLD = 3  # Number of users spamming to trigger slow mode
