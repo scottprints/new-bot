@@ -6,6 +6,7 @@ import os
 import sqlite3
 from discord import Embed
 import time
+from config import *
 
 # Load environment variables bruv
 load_dotenv()
@@ -17,9 +18,6 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 # Apparently we need this shit?
 bot = commands.Bot(command_prefix="!", intents=discord.Intents.all())
 
-# Define a global variable for the mod-actions channel ID
-MOD_ACTIONS_CHANNEL_ID = 1318962030815875123
-
 # Global variable for the server name, initialized when the bot is ready
 SERVER_NAME = None
 
@@ -30,11 +28,6 @@ def get_db_connection():
     if DB_CONNECTION is None or DB_CONNECTION.closed:
         DB_CONNECTION = sqlite3.connect('db/warnings.db')
     return DB_CONNECTION
-
-ROLE_LEVELS = {
-    1: {"Moderator", "Admin"},  # Level 1: Gang
-    2: {"Admin"}                # Level 2: Kool Kids Klub
-}
 
 # Function to check if a user has the required role level, sometimes works, change one line of unrelated code and it'll break.
 # Abstracting role-checking logic
@@ -237,19 +230,8 @@ async def delete_verification(interaction: discord.Interaction, user: discord.Me
 
     await interaction.response.send_message(f"Verification for {user.mention} has been deleted.")
 
-# Define preset messages for specific channels
-PRESET_MESSAGES = {
-    1319069218230243359: Embed(title="📜 Looking for Sleep Call Etiquette", color=0x3498db)
-        .add_field(name="Etiquette and Rules", value="- Do not respond to looking posts in this channel.\n- Check if the poster has an 'Ask to DM' role.\n- If they do, go to the 'Ask To DM' channel to ask if you can DM.", inline=False),
-    1319069228598562846: Embed(title="📜 Ask to DM Etiquette", color=0x3498db)
-        .add_field(name="Respect the 'Ask to DM' Role", value="- Always respect the 'Ask to DM' role.\n- Follow general etiquette and rules.", inline=False)
-}
-
 # Track the last message time for each channel
 last_message_time = {}
-
-# Define cooldown time in seconds
-COOLDOWN_TIME = 30
 
 @bot.event
 async def on_message(message):
@@ -268,6 +250,62 @@ async def on_message(message):
     
     # Process commands if any
     await bot.process_commands(message)
+
+## Create Tag Command
+@bot.tree.command(name="create-tag")
+@app_commands.describe(channel_id="Channel ID for the tag", title="Title of the tag", message="Message content")
+async def create_tag(interaction: discord.Interaction, channel_id: int, title: str, message: str):
+    # Check for required role level
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    # Create a new tag
+    PRESET_MESSAGES[channel_id] = Embed(title=title, color=0x3498db).add_field(name=title, value=message, inline=False)
+    await interaction.response.send_message(f"Tag created for channel {channel_id}.")
+
+## Read Tags Command
+@bot.tree.command(name="list-tags")
+async def list_tags(interaction: discord.Interaction):
+    # Check for required role level
+    if not await has_required_role(interaction, 1):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    # List all tags
+    if PRESET_MESSAGES:
+        tags_list = "\n".join([f"Channel {channel_id}: {embed.title}" for channel_id, embed in PRESET_MESSAGES.items()])
+        await interaction.response.send_message(f"Current tags:\n{tags_list}")
+    else:
+        await interaction.response.send_message("No tags available.")
+
+## Update Tag Command
+@bot.tree.command(name="update-tag")
+@app_commands.describe(channel_id="Channel ID for the tag", title="New title of the tag", message="New message content")
+async def update_tag(interaction: discord.Interaction, channel_id: int, title: str, message: str):
+    # Check for required role level
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    # Update an existing tag
+    if channel_id in PRESET_MESSAGES:
+        PRESET_MESSAGES[channel_id] = Embed(title=title, color=0x3498db).add_field(name=title, value=message, inline=False)
+        await interaction.response.send_message(f"Tag updated for channel {channel_id}.")
+    else:
+        await interaction.response.send_message("Tag not found.")
+
+## Delete Tag Command
+@bot.tree.command(name="delete-tag")
+@app_commands.describe(channel_id="Channel ID for the tag")
+async def delete_tag(interaction: discord.Interaction, channel_id: int):
+    # Check for required role level
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+    # Delete a tag
+    if channel_id in PRESET_MESSAGES:
+        del PRESET_MESSAGES[channel_id]
+        await interaction.response.send_message(f"Tag deleted for channel {channel_id}.")
+    else:
+        await interaction.response.send_message("Tag not found.")
 
 # Run bot
 bot.run(TOKEN)
