@@ -34,7 +34,10 @@ async def has_required_role(context, required_level: int) -> bool:
     required_roles = ROLE_LEVELS.get(required_level, set())
     return any(role in user_roles for role in required_roles)
 
-## On Ready 
+# ================================
+# ========== ON READY ===========
+# ================================
+
 @bot.event
 async def on_ready():
     global SERVER_NAME
@@ -48,20 +51,29 @@ async def on_ready():
     except Exception as e:
         print(e)
 
-## Test Command
+# ================================
+# ======== TEST COMMAND =========
+# ================================
+
 @bot.tree.command(name="test")
 async def hello(interaction: discord.Interaction):
     # A test command to say hello - REMOVE LATER
     await interaction.response.send_message(f"yes cunt {interaction.user.mention} what you want bruv", ephemeral=True)
 
-## Say Command
+# ================================
+# ========= SAY COMMAND =========
+# ================================
+
 @bot.tree.command(name="say")
 @app_commands.describe(say_something="what cunt")
 async def say(interaction: discord.Interaction, say_something: str):
     # Echo command that repeats whatever nonsense you type - REMOVE LATER
     await interaction.response.send_message(f"{say_something}")
 
-## Verify Command
+# ================================
+# ======== VERIFY COMMAND ========
+# ================================
+
 @bot.tree.command(name="verify")
 @app_commands.describe(user="The user to verify")
 async def verify(interaction: discord.Interaction, user: discord.Member):
@@ -95,7 +107,10 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.response.send_message("Verification role not found.", ephemeral=True)
 
-## Warn Command
+# ================================
+# ========= WARN COMMAND =========
+# ================================
+
 @bot.tree.command(name="warn")
 @app_commands.describe(user="The user to warn", reason="The reason for the warning")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason: str):
@@ -132,8 +147,10 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason: s
     # Send the final response
     await interaction.followup.send(f"{user.mention} has been warned for: {reason}")
 
+# ================================
+# ====== SHOW WARNINGS/NOTES =====
+# ================================
 
-## Show Warnings / Notes
 @bot.tree.command(name="infractions")
 @app_commands.describe(user="The user to check warnings for")
 async def show_warnings(interaction: discord.Interaction, user: discord.Member):
@@ -155,8 +172,10 @@ async def show_warnings(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.response.send_message(f"{user.mention} has no warnings.")
 
+# ================================
+# ======== DELETE WARNINGS =======
+# ================================
 
-## Delete Warnings
 @bot.tree.command(name="delete_warn")
 @app_commands.describe(user="The user whose warning to delete", warning_id="The ID of the warning to delete")
 async def delete_warn(interaction: discord.Interaction, user: discord.Member, warning_id: int):
@@ -179,8 +198,10 @@ async def delete_warn(interaction: discord.Interaction, user: discord.Member, wa
 
     await interaction.response.send_message(f"Warning with ID {warning_id} for {user.mention} has been deleted.")
 
+# ================================
+# ======== ERROR HANDLING ========
+# ================================
 
-## Error Handling
 @bot.event
 async def on_command_error(interaction: discord.Interaction, error):
     # Global error handler
@@ -190,7 +211,10 @@ async def on_command_error(interaction: discord.Interaction, error):
     else:
         await interaction.response.send_message("An error occurred while processing the command.", ephemeral=True)
 
-## Check Verification Command
+# ================================
+# ===== CHECK VERIFICATION =======
+# ================================
+
 @bot.tree.command(name="check-verification")
 @app_commands.describe(user="The user to check verification for")
 async def check_verification(interaction: discord.Interaction, user: discord.Member):
@@ -211,7 +235,10 @@ async def check_verification(interaction: discord.Interaction, user: discord.Mem
     else:
         await interaction.response.send_message(f"{user.mention} is not verified.")
 
-## Delete Verification Command
+# ================================
+# ===== DELETE VERIFICATION ======
+# ================================
+
 @bot.tree.command(name="delete-verification")
 @app_commands.describe(user="The user whose verification to delete")
 async def delete_verification(interaction: discord.Interaction, user: discord.Member):
@@ -304,6 +331,10 @@ async def perform_mute(guild, user, channel):
     else:
         await channel.send("MUTED role not found.")
 
+# ================================
+# ========== MUTE COMMAND ========
+# ================================
+
 @bot.tree.command(name="mute")
 @app_commands.describe(user="The user to mute", duration="Duration in seconds")
 async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
@@ -322,7 +353,10 @@ async def mute(interaction: discord.Interaction, user: discord.Member, duration:
     # Unmute the user after the duration
     await unmute(interaction, user)
 
-## Unmute Command
+# ================================
+# ========= UNMUTE COMMAND =======
+# ================================
+
 @bot.tree.command(name="unmute")
 @app_commands.describe(user="The user to unmute")
 async def unmute(interaction: discord.Interaction, user: discord.Member):
