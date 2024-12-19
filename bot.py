@@ -425,6 +425,9 @@ async def unmute_user(guild, user, channel):
 @bot.tree.command(name="mute")
 @app_commands.describe(user="The user to mute", duration="Duration in seconds")
 async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
+    if not await has_required_role(interaction, 1):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
     await interaction.response.defer()
     await perform_mute(interaction.guild, user, interaction.channel, duration, interaction.user, is_automatic=False)
     await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
@@ -436,7 +439,7 @@ async def mute(interaction: discord.Interaction, user: discord.Member, duration:
 @bot.tree.command(name="unmute")
 @app_commands.describe(user="The user to unmute")
 async def unmute(interaction: discord.Interaction, user: discord.Member):
-    if not await has_required_role(interaction, 2):
+    if not await has_required_role(interaction, 1):
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
 
