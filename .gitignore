@@ -1,4 +1,4 @@
 .env
-create_db.py
+setup_db.py
 db/warnings.db
 

@@ -48,12 +48,49 @@ CREATE TABLE IF NOT EXISTS mod_actions (
 )
 ''')
 
-# Add the moderator_id column to the warnings table
-try:
-    cursor.execute('ALTER TABLE warnings ADD COLUMN moderator_id INTEGER')
-    print("Column 'moderator_id' added to 'warnings' table.")
-except sqlite3.OperationalError as e:
-    print(f"Error: {e}")
+# Create the bans table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS bans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    moderator_id INTEGER,
+    reason TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+''')
+
+# Create the mutes table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS mutes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    moderator_id INTEGER,
+    reason TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+''')
+
+# Create the tickets table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS tickets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    moderator_id INTEGER,
+    type TEXT,
+    status TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+''')
+
+# Create the roles_backup table
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS roles_backup (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    roles TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+''')
 
 # Commit the changes and close the connection
 conn.commit()
