@@ -7,6 +7,7 @@ import sqlite3
 from discord import Embed
 import time
 from config import *
+import asyncio
 
 # Load environment variables bruv
 load_dotenv()
@@ -28,8 +29,8 @@ def get_db_connection():
 
 # Function to check if a user has the required role level, sometimes works, change one line of unrelated code and it'll break.
 # Abstracting role-checking logic
-async def has_required_role(interaction: discord.Interaction, required_level: int) -> bool:
-    user_roles = {role.name for role in interaction.user.roles}
+async def has_required_role(context, required_level: int) -> bool:
+    user_roles = {role.name for role in context.user.roles}
     required_roles = ROLE_LEVELS.get(required_level, set())
     return any(role in user_roles for role in required_roles)
 
@@ -235,11 +236,28 @@ async def delete_verification(interaction: discord.Interaction, user: discord.Me
 # Track the last message time for each channel
 last_message_time = {}
 
+# Track user message activity
+user_message_count = {}
+
 @bot.event
 async def on_message(message):
     # Ignore messages from the bot itself
     if message.author == bot.user:
         return
+
+    # Track message count
+    user_id = message.author.id
+    current_time = time.time()
+    if user_id not in user_message_count:
+        user_message_count[user_id] = []
+    user_message_count[user_id].append(current_time)
+
+    # Remove messages outside the time window
+    user_message_count[user_id] = [t for t in user_message_count[user_id] if current_time - t <= TIME_WINDOW]
+
+    # Check if user exceeds message limit
+    if len(user_message_count[user_id]) > MESSAGE_LIMIT:
+        await perform_mute(message.guild, message.author, message.channel)
 
     # Check if the message is in a channel with a preset message
     if message.channel.id in PRESET_MESSAGES:
@@ -253,90 +271,56 @@ async def on_message(message):
     # Process commands if any
     await bot.process_commands(message)
 
-## Create Tag Command
-@bot.tree.command(name="create-tag")
-@app_commands.describe(channel_id="Channel ID for the tag", title="Title of the tag", message="Message content")
-async def create_tag(interaction: discord.Interaction, channel_id: int, title: str, message: str):
-    # Check for required role level
-    if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-    # Create a new tag
-    PRESET_MESSAGES[channel_id] = Embed(title=title, color=0x3498db).add_field(name=title, value=message, inline=False)
-    await interaction.response.send_message(f"Tag created for channel {channel_id}.")
-
-## Read Tags Command
-@bot.tree.command(name="list-tags")
-async def list_tags(interaction: discord.Interaction):
-    # Check for required role level
-    if not await has_required_role(interaction, 1):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-    # List all tags
-    if PRESET_MESSAGES:
-        tags_list = "\n".join([f"Channel {channel_id}: {embed.title}" for channel_id, embed in PRESET_MESSAGES.items()])
-        await interaction.response.send_message(f"Current tags:\n{tags_list}")
-    else:
-        await interaction.response.send_message("No tags available.")
-
-## Update Tag Command
-@bot.tree.command(name="update-tag")
-@app_commands.describe(channel_id="Channel ID for the tag", title="New title of the tag", message="New message content")
-async def update_tag(interaction: discord.Interaction, channel_id: int, title: str, message: str):
-    # Check for required role level
-    if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-    # Update an existing tag
-    if channel_id in PRESET_MESSAGES:
-        PRESET_MESSAGES[channel_id] = Embed(title=title, color=0x3498db).add_field(name=title, value=message, inline=False)
-        await interaction.response.send_message(f"Tag updated for channel {channel_id}.")
-    else:
-        await interaction.response.send_message("Tag not found.")
-
-## Delete Tag Command
-@bot.tree.command(name="delete-tag")
-@app_commands.describe(channel_id="Channel ID for the tag")
-async def delete_tag(interaction: discord.Interaction, channel_id: int):
-    # Check for required role level
-    if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-    # Delete a tag
-    if channel_id in PRESET_MESSAGES:
-        del PRESET_MESSAGES[channel_id]
-        await interaction.response.send_message(f"Tag deleted for channel {channel_id}.")
-    else:
-        await interaction.response.send_message("Tag not found.")
-
-## Mute Command
-@bot.tree.command(name="mute")
-@app_commands.describe(user="The user to mute")
-async def mute(interaction: discord.Interaction, user: discord.Member):
-    # Check for required role level
-    if not await has_required_role(interaction, 1):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-
-    # Check role hierarchy
-    if interaction.user.top_role <= user.top_role:
-        await interaction.response.send_message("You cannot mute a user with an equal or higher role.")
+async def perform_mute(guild, user, channel):
+    # Ensure the bot has a higher role than the user
+    bot_member = guild.get_member(bot.user.id)
+    if bot_member.top_role <= user.top_role:
+        await channel.send("I cannot mute a user with an equal or higher role than mine.")
         return
 
     # Save current roles and assign MUTED role
-    roles = [role.id for role in user.roles if role != interaction.guild.default_role]
+    roles = [role.id for role in user.roles if role != guild.default_role]
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?)', (user.id, ','.join(map(str, roles))))
+
+    # Check if the user already has a backup
+    cursor.execute('SELECT roles FROM roles_backup WHERE user_id = ?', (user.id,))
+    row = cursor.fetchone()
+
+    if row:
+        # Update existing entry
+        cursor.execute('UPDATE roles_backup SET roles = ? WHERE user_id = ?', (','.join(map(str, roles)), user.id))
+    else:
+        # Insert new entry
+        cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?)', (user.id, ','.join(map(str, roles))))
+
     conn.commit()
     conn.close()
 
-    muted_role = discord.utils.get(interaction.guild.roles, name="MUTED")
+    muted_role = discord.utils.get(guild.roles, name="MUTED")
     if muted_role:
         await user.edit(roles=[muted_role])
-        await interaction.response.send_message(f"{user.mention} has been muted.")
+        await channel.send(f"{user.mention} has been muted.")
     else:
-        await interaction.response.send_message("MUTED role not found.", ephemeral=True)
+        await channel.send("MUTED role not found.")
+
+@bot.tree.command(name="mute")
+@app_commands.describe(user="The user to mute", duration="Duration in seconds")
+async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
+    # Defer the response to keep the interaction alive
+    await interaction.response.defer()
+
+    # Perform mute operation
+    await perform_mute(interaction.guild, user, interaction.channel)
+
+    # Send confirmation message
+    await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
+
+    # Wait for the specified duration
+    await asyncio.sleep(duration)
+
+    # Unmute the user after the duration
+    await unmute(interaction, user)
 
 ## Unmute Command
 @bot.tree.command(name="unmute")
@@ -346,6 +330,20 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
     if not await has_required_role(interaction, 2):
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
+
+    # Defer the response to keep the interaction alive
+    await interaction.response.defer()
+
+    # Remove the MUTED role if the user has it
+    muted_role = discord.utils.get(interaction.guild.roles, name="MUTED")
+    if muted_role:
+        if muted_role in user.roles:
+            await user.remove_roles(muted_role)
+            await interaction.followup.send(f" {user.mention} unmuted.")
+        else:
+            await interaction.followup.send(f"{user.mention} does not have the MUTED role.")
+    else:
+        await interaction.followup.send("MUTED role not found.")
 
     # Retrieve and restore previous roles
     conn = get_db_connection()
@@ -358,9 +356,9 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
         role_ids = map(int, row[0].split(','))
         roles = [discord.utils.get(interaction.guild.roles, id=role_id) for role_id in role_ids]
         await user.edit(roles=roles)
-        await interaction.response.send_message(f"{user.mention} has been unmuted.")
+        await interaction.followup.send(f"{user.mention} has been unmuted.")
     else:
-        await interaction.response.send_message("No role backup found for this user.", ephemeral=True)
+        await interaction.followup.send("No role backup found for this user.")
 
 @bot.event
 async def on_member_remove(member):

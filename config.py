@@ -17,3 +17,7 @@ ROLE_LEVELS = {
     1: {"Moderator", "Admin"},  # Level 1: Gang
     2: {"Admin"}                # Level 2: Kool Kids Klub
 }
+
+# Define message limit and time window for spam detection
+MESSAGE_LIMIT = 5  # Number of messages allowed
+TIME_WINDOW = 10  # Time window in seconds
