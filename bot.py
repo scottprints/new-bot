@@ -4,6 +4,8 @@ from discord.ext import commands
 from dotenv import load_dotenv
 import os
 import sqlite3
+from discord import Embed
+import time
 
 # Load environment variables bruv
 load_dotenv()
@@ -25,7 +27,7 @@ SERVER_NAME = None
 DB_CONNECTION = None
 def get_db_connection():
     global DB_CONNECTION
-    if DB_CONNECTION is None:
+    if DB_CONNECTION is None or DB_CONNECTION.closed:
         DB_CONNECTION = sqlite3.connect('db/warnings.db')
     return DB_CONNECTION
 
@@ -80,7 +82,7 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
     role = discord.utils.get(interaction.guild.roles, name="18+ Verified")
     if role:
         if role in user.roles:
-            await interaction.response.send_message(f"{user.mention} already has the {role.name} role.", ephemeral=True)
+            await interaction.response.send_message(f"{user.mention} already has the {role.name} role.")
         else:
             await user.add_roles(role)
             await interaction.response.send_message(f"{user.mention} has been verified and given the {role.name} role.")
@@ -196,6 +198,76 @@ async def on_command_error(interaction: discord.Interaction, error):
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
     else:
         await interaction.response.send_message("An error occurred while processing the command.", ephemeral=True)
+
+## Check Verification Command
+@bot.tree.command(name="check-verification")
+@app_commands.describe(user="The user to check verification for")
+async def check_verification(interaction: discord.Interaction, user: discord.Member):
+    # Check if a user is verified
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM verifications WHERE user_id = ?', (user.id,))
+    verification = cursor.fetchone()
+    conn.close()
+
+    if verification:
+        role = discord.utils.get(interaction.guild.roles, name="18+ Verified")
+        if role and role not in user.roles:
+            await user.add_roles(role)
+            await interaction.response.send_message(f"{user.mention} is verified already and the role has been added back.")
+        else:
+            await interaction.response.send_message(f"{user.mention} is verified.")
+    else:
+        await interaction.response.send_message(f"{user.mention} is not verified.")
+
+## Delete Verification Command
+@bot.tree.command(name="delete-verification")
+@app_commands.describe(user="The user whose verification to delete")
+async def delete_verification(interaction: discord.Interaction, user: discord.Member):
+    # Delete a user's verification
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM verifications WHERE user_id = ?', (user.id,))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"Verification for {user.mention} has been deleted.")
+
+# Define preset messages for specific channels
+PRESET_MESSAGES = {
+    1319069218230243359: Embed(title="📜 Looking for Sleep Call Etiquette", color=0x3498db)
+        .add_field(name="Etiquette and Rules", value="- Do not respond to looking posts in this channel.\n- Check if the poster has an 'Ask to DM' role.\n- If they do, go to the 'Ask To DM' channel to ask if you can DM.", inline=False),
+    1319069228598562846: Embed(title="📜 Ask to DM Etiquette", color=0x3498db)
+        .add_field(name="Respect the 'Ask to DM' Role", value="- Always respect the 'Ask to DM' role.\n- Follow general etiquette and rules.", inline=False)
+}
+
+# Track the last message time for each channel
+last_message_time = {}
+
+# Define cooldown time in seconds
+COOLDOWN_TIME = 30
+
+@bot.event
+async def on_message(message):
+    # Ignore messages from the bot itself
+    if message.author == bot.user:
+        return
+
+    # Check if the message is in a channel with a preset message
+    if message.channel.id in PRESET_MESSAGES:
+        current_time = time.time()
+        last_time = last_message_time.get(message.channel.id, 0)
+        # Check if cooldown time has passed since the last message
+        if current_time - last_time > COOLDOWN_TIME:
+            await message.channel.send(embed=PRESET_MESSAGES[message.channel.id])
+            last_message_time[message.channel.id] = current_time
+    
+    # Process commands if any
+    await bot.process_commands(message)
 
 # Run bot
 bot.run(TOKEN)
