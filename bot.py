@@ -24,10 +24,7 @@ SERVER_NAME = None
 # Global database connection, initialized when needed
 DB_CONNECTION = None
 def get_db_connection():
-    global DB_CONNECTION
-    if DB_CONNECTION is None or DB_CONNECTION.closed:
-        DB_CONNECTION = sqlite3.connect('db/warnings.db')
-    return DB_CONNECTION
+    return sqlite3.connect('db/warnings.db')
 
 # Function to check if a user has the required role level, sometimes works, change one line of unrelated code and it'll break.
 # Abstracting role-checking logic
@@ -306,6 +303,59 @@ async def delete_tag(interaction: discord.Interaction, channel_id: int):
         await interaction.response.send_message(f"Tag deleted for channel {channel_id}.")
     else:
         await interaction.response.send_message("Tag not found.")
+
+## Mute Command
+@bot.tree.command(name="mute")
+@app_commands.describe(user="The user to mute")
+async def mute(interaction: discord.Interaction, user: discord.Member):
+    # Check for required role level
+    if not await has_required_role(interaction, 1):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    # Check role hierarchy
+    if interaction.user.top_role <= user.top_role:
+        await interaction.response.send_message("You cannot mute a user with an equal or higher role.")
+        return
+
+    # Save current roles and assign MUTED role
+    roles = [role.id for role in user.roles if role != interaction.guild.default_role]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?)', (user.id, ','.join(map(str, roles))))
+    conn.commit()
+    conn.close()
+
+    muted_role = discord.utils.get(interaction.guild.roles, name="MUTED")
+    if muted_role:
+        await user.edit(roles=[muted_role])
+        await interaction.response.send_message(f"{user.mention} has been muted.")
+    else:
+        await interaction.response.send_message("MUTED role not found.", ephemeral=True)
+
+## Unmute Command
+@bot.tree.command(name="unmute")
+@app_commands.describe(user="The user to unmute")
+async def unmute(interaction: discord.Interaction, user: discord.Member):
+    # Check for required role level
+    if not await has_required_role(interaction, 2):
+        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        return
+
+    # Retrieve and restore previous roles
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT roles FROM roles_backup WHERE user_id = ?', (user.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        role_ids = map(int, row[0].split(','))
+        roles = [discord.utils.get(interaction.guild.roles, id=role_id) for role_id in role_ids]
+        await user.edit(roles=roles)
+        await interaction.response.send_message(f"{user.mention} has been unmuted.")
+    else:
+        await interaction.response.send_message("No role backup found for this user.", ephemeral=True)
 
 # Run bot
 bot.run(TOKEN)
