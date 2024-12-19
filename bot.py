@@ -225,7 +225,12 @@ async def delete_verification(interaction: discord.Interaction, user: discord.Me
     conn.commit()
     conn.close()
 
-    await interaction.response.send_message(f"Verification for {user.mention} has been deleted.")
+    # Remove the '18+ Verified' role if the user has it
+    role = discord.utils.get(interaction.guild.roles, name="18+ Verified")
+    if role and role in user.roles:
+        await user.remove_roles(role)
+
+    await interaction.response.send_message(f"Verification for {user.mention} has been deleted and the role removed.")
 
 # Track the last message time for each channel
 last_message_time = {}
@@ -356,6 +361,30 @@ async def unmute(interaction: discord.Interaction, user: discord.Member):
         await interaction.response.send_message(f"{user.mention} has been unmuted.")
     else:
         await interaction.response.send_message("No role backup found for this user.", ephemeral=True)
+
+@bot.event
+async def on_member_remove(member):
+    # Save current roles when a user leaves
+    roles = [role.id for role in member.roles if role != member.guild.default_role]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO roles_backup (user_id, roles) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET roles=excluded.roles', (member.id, ','.join(map(str, roles))))
+    conn.commit()
+    conn.close()
+
+@bot.event
+async def on_member_join(member):
+    # Restore roles when a user rejoins
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT roles FROM roles_backup WHERE user_id = ?', (member.id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        role_ids = map(int, row[0].split(','))
+        roles = [discord.utils.get(member.guild.roles, id=role_id) for role_id in role_ids]
+        await member.add_roles(*roles)
 
 # Run bot
 bot.run(TOKEN)
