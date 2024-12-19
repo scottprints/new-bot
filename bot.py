@@ -93,6 +93,12 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
                     print(f"Failed to send message to mod-actions channel: {e}")
             else:
                 print("Mod-actions channel not found.")
+            # Log the verification in the database
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO verifications (user_id, moderator_id) VALUES (?, ?)', (user.id, interaction.user.id))
+            conn.commit()
+            conn.close()
     else:
         await interaction.response.send_message("Verification role not found.", ephemeral=True)
 
@@ -111,7 +117,7 @@ async def warn(interaction: discord.Interaction, user: discord.Member, reason: s
     conn = get_db_connection()
     cursor = conn.cursor()
     print("Inserting warning into database...")
-    cursor.execute('INSERT INTO warnings (user_id, reason) VALUES (?, ?)', (user.id, reason))
+    cursor.execute('INSERT INTO warnings (user_id, reason, moderator_id) VALUES (?, ?, ?)', (user.id, reason, interaction.user.id))
     conn.commit()
     conn.close()
     print("Warning inserted into database.")
@@ -146,12 +152,12 @@ async def show_warnings(interaction: discord.Interaction, user: discord.Member):
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT reason, timestamp FROM warnings WHERE user_id = ?', (user.id,))
+    cursor.execute('SELECT id, reason, timestamp, moderator_id FROM warnings WHERE user_id = ?', (user.id,))
     rows = cursor.fetchall()
     conn.close()
 
     if rows:
-        warnings_list = "\n".join([f"{timestamp}: {reason}" for reason, timestamp in rows])
+        warnings_list = "\n".join([f"**{warn_id}**: {timestamp}: {reason} (by <@{moderator_id}>)" for warn_id, reason, timestamp, moderator_id in rows])
         await interaction.response.send_message(f"{user.mention} has the following warnings:\n{warnings_list}")
     else:
         await interaction.response.send_message(f"{user.mention} has no warnings.")
