@@ -264,6 +264,9 @@ async def delete_verification(interaction: discord.Interaction, user: discord.Me
 
     await interaction.response.send_message(f"Verification for {user.mention} has been deleted and the role removed.")
 
+# ================================
+# ======= ANTI-SPAM LOGIC ========
+# ================================
 # Track the last message time for each channel
 last_message_time = {}
 
@@ -478,7 +481,9 @@ async def on_member_join(member):
         roles = [discord.utils.get(member.guild.roles, id=role_id) for role_id in role_ids]
         await member.add_roles(*roles)
 
-    # Check if the account is less than a year old
+# ================================
+# ======= NEW USER LOGIC =========
+# ================================
     account_age = (discord.utils.utcnow() - member.created_at).days
     logging.debug(f"Account age for {member.mention}: {account_age} days")
     if account_age < 365:
@@ -498,7 +503,7 @@ async def on_member_join(member):
                 logging.error("MUTED role not found in guild roles")
 
 # ================================
-# ======== BOT DETAILS ==========
+# ======== BOT DETAILS ===========
 # ================================
 
 @bot.tree.command(name="botinfo")
@@ -593,7 +598,7 @@ async def ban_id(interaction: discord.Interaction, user_id: str, reason: str):
         # Send a DM to the user before banning if they are a member
         if member:
             try:
-                await user.send(f"You are about to be banned from **{SERVER_NAME}** for: {reason}\n\nFeel your ban was unfair? Appeal ban on our unban server: <cringe link>")
+                await user.send(f"You have been banned from **{SERVER_NAME}** for: {reason}\n\nFeel your ban was unfair? Appeal ban on our unban server: <cringe link>")
             except discord.Forbidden:
                 logging.warning(f"Could not send DM to {user.mention}. They might have DMs disabled.")
 
