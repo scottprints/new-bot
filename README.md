@@ -62,6 +62,11 @@ Bot for swewerver
   - [X] Bot Details Command: Provides information about the bot, including ping and server name.
   - [X] Anti-Spam Logic: Detects and mutes users for excessive messaging and enables slow mode if multiple users spam.
   - [X] Role Backup and Restore: Saves and restores user roles when they leave and rejoin the server.
+  - [X] Notes System
+    - [X] Add notes to users with /note command
+    - [X] View user notes with view_notes command
+    - [X] Integrated with infractions command to display notes
+    - [X] Persistent storage of notes in the database
 ---
 # Dependencies
 - `discord.py`: For interacting with the Discord API.

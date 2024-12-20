@@ -181,7 +181,28 @@ async def show_warnings(interaction: discord.Interaction, user: discord.Member):
         notes_button = Button(label="View Notes", style=discord.ButtonStyle.primary)
 
         async def notes_callback(interaction):
-            await view_notes(interaction, user)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, reason, timestamp, author_id FROM notes WHERE user_id = ?', (user.id,))
+            rows = cursor.fetchall()
+            conn.close()
+
+            if rows:
+                notes_list = "\n".join([f"**ID**: {note_id}\n**Reason**: {reason}\n**Date**: {timestamp}\n**Author**: <@{author_id}>" for note_id, reason, timestamp, author_id in rows])
+                embed = Embed(title=f"{user.name}'s Notes", description=notes_list, color=0x3498db)
+            else:
+                embed = Embed(title=f"{user.name}'s Notes", description="No notes found.", color=0x3498db)
+
+            back_button = Button(label="Back to Warnings", style=discord.ButtonStyle.secondary)
+
+            async def back_callback(interaction):
+                await show_warnings.callback(interaction, user=user)
+
+            back_button.callback = back_callback
+            view = View()
+            view.add_item(back_button)
+
+            await interaction.response.edit_message(embed=embed, view=view)
 
         notes_button.callback = notes_callback
         view.add_item(notes_button)
@@ -668,6 +689,10 @@ async def add_note(interaction: discord.Interaction, user: discord.Member, reaso
 @bot.tree.command(name="view_notes")
 @app_commands.describe(user="The user to view notes for")
 async def view_notes(interaction: discord.Interaction, user: discord.Member):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id, reason, timestamp, author_id FROM notes WHERE user_id = ?', (user.id,))
@@ -679,7 +704,7 @@ async def view_notes(interaction: discord.Interaction, user: discord.Member):
         embed = Embed(title=f"{user.name}'s Notes", description=notes_list, color=0x3498db)
         await interaction.response.send_message(embed=embed, ephemeral=True)
     else:
-        await interaction.response.send_message(f"No notes found for {user.mention}.", ephemeral=True)
+        await interaction.response.send_message(f"No notes found for {user.mention}.")
 
 # Run bot
 bot.run(TOKEN)
