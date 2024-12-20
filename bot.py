@@ -474,9 +474,28 @@ async def on_member_join(member):
     conn.close()
 
     if row:
-        role_ids = map(int, row[0].split(','))
+        role_ids = map(int, filter(None, row[0].split(',')))  # Filter out empty strings
         roles = [discord.utils.get(member.guild.roles, id=role_id) for role_id in role_ids]
         await member.add_roles(*roles)
+
+    # Check if the account is less than a year old
+    account_age = (discord.utils.utcnow() - member.created_at).days
+    logging.debug(f"Account age for {member.mention}: {account_age} days")
+    if account_age < 365:
+        # Check if the user has the '18+ Verified' role stored
+        if not any(role.name == "18+ Verified" for role in roles):
+            logging.debug(f"{member.mention} does not have '18+ Verified' role stored")
+            # Assign the muted role
+            muted_role = discord.utils.get(member.guild.roles, id=MUTED_ROLE_ID)
+            if muted_role:
+                await member.add_roles(muted_role)
+                logging.info(f"Assigned MUTED role to {member.mention} due to account age ({account_age} days)")
+                # Log the action in the mod-actions channel
+                mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+                if mod_actions_channel:
+                    await mod_actions_channel.send(f"{member.mention} was automatically assigned the MUTED role due to account age ({account_age} days).")
+            else:
+                logging.error("MUTED role not found in guild roles")
 
 # ================================
 # ======== BOT DETAILS ==========
