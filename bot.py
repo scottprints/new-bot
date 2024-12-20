@@ -9,6 +9,7 @@ import time
 from config import *
 import asyncio
 import logging
+from discord.ui import Button, View
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -174,7 +175,18 @@ async def show_warnings(interaction: discord.Interaction, user: discord.Member):
 
     if rows:
         warnings_list = "\n".join([f"**{warn_id}**: {timestamp}: {reason} (by <@{moderator_id}>)" for warn_id, reason, timestamp, moderator_id in rows])
-        await interaction.response.send_message(f"{user.mention} has the following warnings:\n{warnings_list}")
+        embed = Embed(title=f"{user.name}'s Warnings", description=warnings_list, color=0x3498db)
+
+        view = View()
+        notes_button = Button(label="View Notes", style=discord.ButtonStyle.primary)
+
+        async def notes_callback(interaction):
+            await view_notes(interaction, user)
+
+        notes_button.callback = notes_callback
+        view.add_item(notes_button)
+
+        await interaction.response.send_message(embed=embed, view=view)
     else:
         await interaction.response.send_message(f"{user.mention} has no warnings.")
 
@@ -632,6 +644,42 @@ async def ban_id(interaction: discord.Interaction, user_id: str, reason: str):
             await mod_actions_channel.send(f"{user.mention} was banned for: {reason} by {interaction.user.mention}.")
     except discord.NotFound:
         await interaction.response.send_message("User not found.", ephemeral=True)
+
+# ================================
+# ====== NOTE SYSTEM =============
+# ================================
+
+@bot.tree.command(name="note")
+@app_commands.describe(user="The user to add a note to", reason="The reason for the note")
+async def add_note(interaction: discord.Interaction, user: discord.Member, reason: str):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO notes (user_id, author_id, reason) VALUES (?, ?, ?)', (user.id, interaction.user.id, reason))
+    conn.commit()
+    conn.close()
+
+    await interaction.response.send_message(f"Note added for {user.mention}.", ephemeral=True)
+
+# View Notes Command
+@bot.tree.command(name="view_notes")
+@app_commands.describe(user="The user to view notes for")
+async def view_notes(interaction: discord.Interaction, user: discord.Member):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, reason, timestamp, author_id FROM notes WHERE user_id = ?', (user.id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    if rows:
+        notes_list = "\n".join([f"**ID**: {note_id}\n**Reason**: {reason}\n**Date**: {timestamp}\n**Author**: <@{author_id}>" for note_id, reason, timestamp, author_id in rows])
+        embed = Embed(title=f"{user.name}'s Notes", description=notes_list, color=0x3498db)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(f"No notes found for {user.mention}.", ephemeral=True)
 
 # Run bot
 bot.run(TOKEN)

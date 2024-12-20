@@ -91,6 +91,17 @@ CREATE TABLE IF NOT EXISTS roles_backup (
 );
 ''')
 
+# Add a table for storing notes
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+''')
+
 # Commit the changes and close the connection
 conn.commit()
 conn.close()
