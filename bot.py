@@ -331,7 +331,6 @@ async def perform_mute(guild, user, channel, duration, moderator, is_automatic=F
     # Check if the user already has the MUTED role
     muted_role = discord.utils.get(guild.roles, id=MUTED_ROLE_ID)
     if muted_role and muted_role.id in [role.id for role in user.roles]:
-        await channel.send(f"{user.mention} is already muted.")
         logging.info(f"{user.mention} is already muted")
         return
 
@@ -358,7 +357,7 @@ async def perform_mute(guild, user, channel, duration, moderator, is_automatic=F
         mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
         if mod_actions_channel:
             await mod_actions_channel.send(f"{user.mention} was muted for {duration} seconds by {moderator.mention}.")
-        # Send the mute message if it's an automatic mute
+        # Send the mute message only if it's an automatic mute
         if is_automatic:
             await channel.send(f"{user.mention} has been muted for {duration} seconds.")
         # Run the unmute operation in the background
@@ -425,15 +424,36 @@ async def unmute_user(guild, user, channel):
 # ========== MUTE COMMAND ========
 # ================================
 
+def parse_duration(duration_str: str) -> int:
+    """Convert a duration string like '10s', '10m', '10h' into seconds."""
+    unit = duration_str[-1]
+    if unit not in 'smh':
+        raise ValueError("Invalid duration unit. Use 's', 'm', or 'h'.")
+    try:
+        value = int(duration_str[:-1])
+    except ValueError:
+        raise ValueError("Invalid duration value.")
+    if unit == 's':
+        return value
+    elif unit == 'm':
+        return value * 60
+    elif unit == 'h':
+        return value * 3600
+
 @bot.tree.command(name="mute")
-@app_commands.describe(user="The user to mute", duration="Duration in seconds")
-async def mute(interaction: discord.Interaction, user: discord.Member, duration: int):
+@app_commands.describe(user="The user to mute", duration="Duration (e.g., '10s (10 seconds)', '10m (10 minutes)', '10h (10 hours)')")
+async def mute(interaction: discord.Interaction, user: discord.Member, duration: str):
     if not await has_required_role(interaction, 1):
         await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
         return
+    try:
+        duration_seconds = parse_duration(duration)
+    except ValueError as e:
+        await interaction.response.send_message(str(e), ephemeral=True)
+        return
     await interaction.response.defer()
-    await perform_mute(interaction.guild, user, interaction.channel, duration, interaction.user, is_automatic=False)
-    await interaction.followup.send(f"{user.mention} has been muted for {duration} seconds.")
+    await perform_mute(interaction.guild, user, interaction.channel, duration_seconds, interaction.user, is_automatic=False)
+    await interaction.followup.send(f"{user.mention} has been muted for {duration}.")
 
 # ================================
 # ========= UNMUTE COMMAND =======
