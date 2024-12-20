@@ -512,7 +512,7 @@ async def ban(interaction: discord.Interaction, user: discord.Member, reason: st
 
     # Send a DM to the user before banning
     try:
-        await user.send(f"You are about to be banned from **{SERVER_NAME}** for: {reason}\n\nFeel your ban was unfair? Appeal ban on our unban server: <cringe link>")
+        await user.send(f"You have been banned from **{SERVER_NAME}** for: {reason}\n\nFeel your ban was unfair? Appeal ban on our unban server: <cringe link>")
     except discord.Forbidden:
         logging.warning(f"Could not send DM to {user.mention}. They might have DMs disabled.")
 
@@ -549,6 +549,43 @@ async def unban(interaction: discord.Interaction, user_id: str):
         mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
         if mod_actions_channel:
             await mod_actions_channel.send(f"{user.mention} was unbanned by {interaction.user.mention}.")
+    except discord.NotFound:
+        await interaction.response.send_message("User not found.", ephemeral=True)
+
+# ================================
+# ====== BAN BY ID COMMAND =======
+# ================================
+
+@bot.tree.command(name="ban_id")
+@app_commands.describe(user_id="The ID of the user to ban", reason="The reason for the ban")
+async def ban_id(interaction: discord.Interaction, user_id: str, reason: str):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
+    try:
+        user_id = int(user_id.strip())  # Strip any whitespace and convert to int
+    except ValueError:
+        await interaction.response.send_message("Please provide a valid integer for the user ID.", ephemeral=True)
+        return
+    try:
+        user = await bot.fetch_user(user_id)
+        member = interaction.guild.get_member(user.id)  # Check if the user is a member
+
+        # Send a DM to the user before banning if they are a member
+        if member:
+            try:
+                await user.send(f"You are about to be banned from **{SERVER_NAME}** for: {reason}\n\nFeel your ban was unfair? Appeal ban on our unban server: <cringe link>")
+            except discord.Forbidden:
+                logging.warning(f"Could not send DM to {user.mention}. They might have DMs disabled.")
+
+        # Proceed to ban the user
+        await interaction.guild.ban(user, reason=reason)
+        await interaction.response.send_message(f"{user.mention} has been banned for: {reason}")
+
+        # Log the ban action in the mod-actions channel
+        mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+        if mod_actions_channel:
+            await mod_actions_channel.send(f"{user.mention} was banned for: {reason} by {interaction.user.mention}.")
     except discord.NotFound:
         await interaction.response.send_message("User not found.", ephemeral=True)
 
