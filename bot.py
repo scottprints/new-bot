@@ -38,6 +38,10 @@ async def has_required_role(context, required_level: int) -> bool:
     required_roles = ROLE_LEVELS.get(required_level, set())
     return any(role in user_roles for role in required_roles)
 
+# Utility function to send permission denial message
+async def send_permission_denied_message(interaction: discord.Interaction):
+    await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+
 # ================================
 # ========== ON READY ===========
 # ================================
@@ -81,11 +85,10 @@ async def say(interaction: discord.Interaction, say_something: str):
 @bot.tree.command(name="verify")
 @app_commands.describe(user="The user to verify")
 async def verify(interaction: discord.Interaction, user: discord.Member):
-    # Verify a user, grants 18+ role
     if not await has_required_role(interaction, 1):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        await send_permission_denied_message(interaction)
         return
-
+    # Verify a user, grants 18+ role
     role = discord.utils.get(interaction.guild.roles, name="18+ Verified")
     if role:
         if role in user.roles:
@@ -118,12 +121,11 @@ async def verify(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="warn")
 @app_commands.describe(user="The user to warn", reason="The reason for the warning")
 async def warn(interaction: discord.Interaction, user: discord.Member, reason: str):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
     # Issue a warning to a user
     # Logs the warning in the database and harasses them via DM
-    if not await has_required_role(interaction, 1):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-
     logging.info(f"Warn command triggered by {interaction.user.mention} for {user.mention} with reason: {reason}")
 
     conn = get_db_connection()
@@ -183,12 +185,11 @@ async def show_warnings(interaction: discord.Interaction, user: discord.Member):
 @bot.tree.command(name="delete_warn")
 @app_commands.describe(user="The user whose warning to delete", warning_id="The ID of the warning to delete")
 async def delete_warn(interaction: discord.Interaction, user: discord.Member, warning_id: int):
+    if not await has_required_role(interaction, 2):
+        await send_permission_denied_message(interaction)
+        return
     # Delete a specific warning from the database
     # Only users with the required role level can perform this action
-    if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
-        return
-
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM warnings WHERE user_id = ? AND id = ?', (user.id, warning_id))
@@ -246,11 +247,10 @@ async def check_verification(interaction: discord.Interaction, user: discord.Mem
 @bot.tree.command(name="delete-verification")
 @app_commands.describe(user="The user whose verification to delete")
 async def delete_verification(interaction: discord.Interaction, user: discord.Member):
-    # Delete a user's verification
     if not await has_required_role(interaction, 2):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+        await send_permission_denied_message(interaction)
         return
-
+    # Delete a user's verification
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('DELETE FROM verifications WHERE user_id = ?', (user.id,))
@@ -439,10 +439,9 @@ async def mute(interaction: discord.Interaction, user: discord.Member, duration:
 @bot.tree.command(name="unmute")
 @app_commands.describe(user="The user to unmute")
 async def unmute(interaction: discord.Interaction, user: discord.Member):
-    if not await has_required_role(interaction, 1):
-        await interaction.response.send_message("You do not have permission to use this command.", ephemeral=True)
+    if not await has_required_role(interaction, 2):
+        await send_permission_denied_message(interaction)
         return
-
     await interaction.response.defer()
     await unmute_user(interaction.guild, user, interaction.channel)
     await interaction.followup.send(f"{user.mention} has been unmuted.")
