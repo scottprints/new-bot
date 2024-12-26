@@ -706,5 +706,36 @@ async def view_notes(interaction: discord.Interaction, user: discord.Member):
     else:
         await interaction.response.send_message(f"No notes found for {user.mention}.")
 
+# Set Slowmode Command
+@bot.tree.command(name="slowmode")
+@app_commands.describe(duration="Duration in seconds")
+async def slowmode(interaction: discord.Interaction, duration: int):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
+
+    await interaction.channel.edit(slowmode_delay=duration)
+    await interaction.response.send_message(f"Slow mode set to {duration} seconds in {interaction.channel.mention}.")
+
+    # Log the action in the mod-actions channel
+    mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+    if mod_actions_channel:
+        await mod_actions_channel.send(f"Slow mode set to {duration} seconds in {interaction.channel.mention} by {interaction.user.mention}.")
+
+# Disable Slowmode Command
+@bot.tree.command(name="unslowmode")
+async def unslowmode(interaction: discord.Interaction):
+    if not await has_required_role(interaction, 1):
+        await send_permission_denied_message(interaction)
+        return
+
+    await interaction.channel.edit(slowmode_delay=0)
+    await interaction.response.send_message(f"Slow mode disabled in {interaction.channel.mention}.")
+
+    # Log the action in the mod-actions channel
+    mod_actions_channel = bot.get_channel(MOD_ACTIONS_CHANNEL_ID)
+    if mod_actions_channel:
+        await mod_actions_channel.send(f"Slow mode disabled in {interaction.channel.mention} by {interaction.user.mention}.")
+
 # Run bot
 bot.run(TOKEN)
