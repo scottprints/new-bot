@@ -1,4 +1,5 @@
 .env
 setup_db.py
 db/warnings.db
+*.pem
 

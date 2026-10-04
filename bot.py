@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 import os
 import sqlite3
@@ -9,7 +9,14 @@ import time
 from config import *
 import asyncio
 import logging
+from datetime import datetime, timedelta
+import calendar
 from discord.ui import Button, View
+import pytz
+from flask import Flask, jsonify
+from flask_cors import CORS
+from threading import Thread
+import json
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,6 +26,15 @@ load_dotenv()
 
 # Grab the token from the environment, because I'm not leaking the token like I leaked 1000s of usernames/emails back in 2018, it was me DJ!!
 TOKEN = os.getenv('DISCORD_TOKEN')
+
+# Google Sheets API credentials
+SHEETS_CREDS = os.getenv('GOOGLE_SHEETS_CREDS')
+BUDGET_SHEET_ID = os.getenv('BUDGET_SHEET_ID')
+
+# Relationship Website details
+WEBSITE_URL = os.getenv('WEBSITE_URL')
+ANNIVERSARY_DATE = os.getenv('ANNIVERSARY_DATE')  # Format: YYYY-MM-DD
+PHOTOS_DIR = os.getenv('PHOTOS_DIR')  # Directory containing relationship photos
 
 # Initialize the bot with a command prefix and all intents enabled
 # Apparently we need this shit?
@@ -35,6 +51,10 @@ def get_db_connection():
 # Function to check if a user has the required role level, sometimes works, change one line of unrelated code and it'll break.
 # Abstracting role-checking logic
 async def has_required_role(context, required_level: int) -> bool:
+    # Always allow all commands in the watchlist server
+    if context.guild and context.guild.id == WATCHLIST_SERVER_ID:
+        return context.command.name == "watchlist"
+        
     user_roles = {role.name for role in context.user.roles}
     required_roles = ROLE_LEVELS.get(required_level, set())
     return any(role in user_roles for role in required_roles)
@@ -59,10 +79,70 @@ async def on_ready():
     except Exception as e:
         logging.error(f"Error syncing commands: {e}")
     logging.debug("Exiting on_ready event")
+    
+    # Start the countdown update task
+    bot.loop.create_task(update_countdown_status())
+    
+    # Start the watchlist cache update task
+    bot.loop.create_task(update_watchlist_cache())
+
+# ================================
+# ======= COUNTDOWN TASK =========
+# ================================
+
+def calculate_countdown():
+    """Calculate time remaining until October 21st, 2026 at 5:53PM US/Eastern"""
+    eastern = pytz.timezone('US/Eastern')
+    trip_date = eastern.localize(datetime(2026, 10, 21, 17, 53, 0))
+    current_time = datetime.now(eastern)
+    
+    time_diff = trip_date - current_time
+    
+    if time_diff.total_seconds() <= 0:
+        return "🎉 Trip time!"
+    
+    days = time_diff.days
+    hours = (time_diff.seconds // 3600)
+    
+    return f"{days} days {hours} hours ❤️❤️❤️"
+
+async def update_countdown_status():
+    """Update bot status with countdown at the top of each hour"""
+    await bot.wait_until_ready()
+    logging.info("Countdown task started, will update at the top of each hour")
+    
+    # Update status immediately on startup
+    try:
+        countdown_text = calculate_countdown()
+        activity = discord.Activity(type=discord.ActivityType.watching, name=countdown_text)
+        await bot.change_presence(activity=activity)
+        logging.info(f"Initial status update: {countdown_text}")
+    except Exception as e:
+        logging.error(f"Error updating initial status: {e}")
+    
+    while not bot.is_closed():
+        try:
+            now = datetime.now()
+            # Calculate seconds until the top of the next hour
+            seconds_until_next_hour = (3600 - (now.minute * 60 + now.second))
+            
+            logging.debug(f"Countdown task waiting {seconds_until_next_hour}s until next hour")
+            # Wait until the top of the next hour
+            await asyncio.sleep(seconds_until_next_hour)
+            
+            # Update the status
+            countdown_text = calculate_countdown()
+            activity = discord.Activity(type=discord.ActivityType.watching, name=countdown_text)
+            await bot.change_presence(activity=activity)
+            logging.info(f"Updated status to: {countdown_text}")
+        except Exception as e:
+            logging.error(f"Error updating countdown status: {e}")
+            await asyncio.sleep(60)  # Wait a minute before retrying on error
 
 # ================================
 # ======== TEST COMMAND =========
 # ================================
+
 
 @bot.tree.command(name="test")
 async def hello(interaction: discord.Interaction):
@@ -311,6 +391,11 @@ async def on_message(message):
     logging.debug(f"Received message from {message.author}: {message.content}")
     # Ignore messages from the bot itself
     if message.author == bot.user:
+        return
+
+    # Skip anti-spam logic for the watchlist server
+    if message.guild and message.guild.id == WATCHLIST_SERVER_ID:
+        await bot.process_commands(message)
         return
 
     # Track message count
@@ -737,5 +822,547 @@ async def unslowmode(interaction: discord.Interaction):
     if mod_actions_channel:
         await mod_actions_channel.send(f"Slow mode disabled in {interaction.channel.mention} by {interaction.user.mention}.")
 
-# Run bot
-bot.run(TOKEN)
+# ================================
+# ===== WATCHLIST API CACHE =====
+# ================================
+
+async def update_watchlist_cache():
+    """Periodically cache the watchlist data to a JSON file for the API to read"""
+    while True:
+        try:
+            channel = bot.get_channel(WATCHLIST_CHANNEL_ID)
+            if channel:
+                watchlist_items = []
+                async for message in channel.history(limit=None):
+                    status = "Not Started"
+                    status_emoji = "📝"
+                    
+                    # Check reactions on the message
+                    for reaction in message.reactions:
+                        if str(reaction.emoji) == WATCHED_EMOJI:
+                            status = "Watched"
+                            status_emoji = "✅"
+                            break
+                        elif str(reaction.emoji) == IN_PROGRESS_EMOJI:
+                            status = "In Progress"
+                            status_emoji = "🟨"
+                            break
+                        elif str(reaction.emoji) == NO_EMOJI:
+                            status = "No"
+                            status_emoji = "❌"
+                            break
+                    
+                    watchlist_items.append({
+                        "title": message.content,
+                        "status": status,
+                        "status_emoji": status_emoji,
+                        "message_id": message.id
+                    })
+                
+                # Save to cache file
+                with open('watchlist_cache.json', 'w') as f:
+                    json.dump({
+                        "success": True,
+                        "count": len(watchlist_items),
+                        "items": watchlist_items,
+                        "last_updated": datetime.now().isoformat()
+                    }, f)
+                
+                logging.debug(f"Watchlist cache updated: {len(watchlist_items)} items")
+        except Exception as e:
+            logging.error(f"Error updating watchlist cache: {e}")
+        
+        # Update cache every 60 seconds
+        await asyncio.sleep(60)
+
+# ================================
+# ======= WATCHLIST TRACKING ======
+# ================================
+
+WATCHLIST_SERVER_ID = 1335847249061740656
+WATCHLIST_CHANNEL_ID = 1401396706884587540
+WATCHED_EMOJI = "✅"  # :agree_check:
+IN_PROGRESS_EMOJI = "🟨"  # :yellow_square:
+NO_EMOJI = "❌"  # :x:
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    # Only track reactions in the watchlist channel and server
+    if payload.guild_id != WATCHLIST_SERVER_ID or payload.channel_id != WATCHLIST_CHANNEL_ID:
+        return
+
+    # Get the channel and message objects
+    channel = bot.get_channel(payload.channel_id)
+    message = await channel.fetch_message(payload.message_id)
+
+    # Check if the reaction is one we're tracking
+    if str(payload.emoji) not in [WATCHED_EMOJI, IN_PROGRESS_EMOJI, NO_EMOJI]:
+        return
+
+    # If this is a watched reaction, remove any in-progress or no reaction
+    if str(payload.emoji) == WATCHED_EMOJI:
+        for reaction in message.reactions:
+            if str(reaction.emoji) in [IN_PROGRESS_EMOJI, NO_EMOJI]:
+                await message.clear_reaction(str(reaction.emoji))
+
+    # If this is an in-progress reaction, remove any watched or no reaction
+    elif str(payload.emoji) == IN_PROGRESS_EMOJI:
+        for reaction in message.reactions:
+            if str(reaction.emoji) in [WATCHED_EMOJI, NO_EMOJI]:
+                await message.clear_reaction(str(reaction.emoji))
+
+    # If this is a no reaction, remove any watched or in-progress reaction
+    elif str(payload.emoji) == NO_EMOJI:
+        for reaction in message.reactions:
+            if str(reaction.emoji) in [WATCHED_EMOJI, IN_PROGRESS_EMOJI]:
+                await message.clear_reaction(str(reaction.emoji))
+
+class WatchlistView(discord.ui.View):
+    def __init__(self, watchlist_items: list, page: int = 1, items_per_page: int = 25):
+        super().__init__(timeout=None)  # No timeout
+        self.watchlist_items = watchlist_items
+        self.current_page = page
+        self.items_per_page = items_per_page
+        self.message = None
+        
+        # Calculate total pages based on non-empty categories
+        self.total_pages = self.calculate_total_pages()
+        
+        # Update button states
+        self.update_buttons()
+        
+    def calculate_total_pages(self):
+        # Group items by status
+        watched = []
+        in_progress = []
+        not_started = []
+        no_items = []
+        
+        for title, status in self.watchlist_items:
+            if status == "✅ Watched":
+                watched.append(title)
+            elif status == "🟨 In Progress":
+                in_progress.append(title)
+            elif status == "❌ No":
+                no_items.append(title)
+            else:
+                not_started.append(title)
+                
+        # Create list of non-empty categories
+        categories = []
+        if watched:
+            categories.append(("✅ WATCHED", watched))
+        if in_progress:
+            categories.append(("🟨 IN PROGRESS", in_progress))
+        if not_started:
+            categories.append(("📝 NOT STARTED", not_started))
+            
+        return max(1, (len(categories) + self.items_per_page - 1) // self.items_per_page)
+
+    def update_buttons(self):
+        # Update first/prev buttons
+        self.first_page.disabled = self.current_page == 1
+        self.prev_page.disabled = self.current_page == 1
+        # Update next/last buttons
+        self.next_page.disabled = self.current_page == self.total_pages
+        self.last_page.disabled = self.current_page == self.total_pages
+
+    def get_current_page_embed(self):
+        embed = Embed(title="Watchlist", color=0x3498db)
+        
+        # Separate items by status
+        watched = []
+        in_progress = []
+        not_started = []
+        no_items = []
+        
+        for title, status in self.watchlist_items:
+            if status == "✅ Watched":
+                watched.append(title)
+            elif status == "🟨 In Progress":
+                in_progress.append(title)
+            elif status == "❌ No":
+                no_items.append(title)
+            else:
+                not_started.append(title)
+
+        # Get total count for embed title
+        total_items = len(watched) + len(in_progress) + len(not_started) + len(no_items)
+        
+        # Sort each category alphabetically
+        watched.sort(key=str.casefold)  # Case-insensitive sort
+        in_progress.sort(key=str.casefold)
+        not_started.sort(key=str.casefold)
+        no_items.sort(key=str.casefold)
+        
+        # Create list of non-empty categories with counts
+        all_items = []
+        if watched:
+            all_items.append((f"✅ WATCHED ({len(watched)})", "\n".join(f"• {item}" for item in watched)))
+        if in_progress:
+            all_items.append((f"🟨 IN PROGRESS ({len(in_progress)})", "\n".join(f"• {item}" for item in in_progress)))
+        if not_started:
+            all_items.append((f"📝 NOT STARTED ({len(not_started)})", "\n".join(f"• {item}" for item in not_started)))
+        if no_items:
+            all_items.append((f"❌ NO ({len(no_items)})", "\n".join(f"• {item}" for item in no_items)))
+            
+        # Update embed title to include total count
+        embed.title = f"Watchlist - {total_items} Total Items"
+            
+        # Only show page numbers if there are multiple pages with content
+        if self.total_pages > 1:
+            embed.title = f"Watchlist (Page {self.current_page}/{self.total_pages})"
+
+        # Calculate which items to show on current page
+        start_idx = (self.current_page - 1) * self.items_per_page
+        end_idx = start_idx + self.items_per_page
+        
+        # Add categorized items as fields
+        current_items = all_items[start_idx:end_idx]
+        for category, items in current_items:
+            # Split items into chunks of 1024 characters or less
+            chunks = []
+            current_chunk = []
+            current_length = 0
+            
+            for item in items.split('\n'):
+                # Add 1 for the newline character
+                if current_length + len(item) + 1 > 1000:  # Leave some margin for safety
+                    chunks.append('\n'.join(current_chunk))
+                    current_chunk = [item]
+                    current_length = len(item) + 1
+                else:
+                    current_chunk.append(item)
+                    current_length += len(item) + 1
+            
+            if current_chunk:
+                chunks.append('\n'.join(current_chunk))
+            
+            # Add first chunk with original category name
+            if chunks:
+                embed.add_field(name=category, value=chunks[0], inline=False)
+                
+                # Add any additional chunks with continued category name
+                for i, chunk in enumerate(chunks[1:], 1):
+                    embed.add_field(name=f"{category} (Continued {i})", value=chunk, inline=False)
+
+        return embed
+
+    @discord.ui.button(label="⏮️ First", style=discord.ButtonStyle.grey)
+    async def first_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 1
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_current_page_embed(), view=self)
+
+    @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.blurple)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(1, self.current_page - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_current_page_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.blurple)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = min(self.total_pages, self.current_page + 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_current_page_embed(), view=self)
+
+    @discord.ui.button(label="Last ⏭️", style=discord.ButtonStyle.grey)
+    async def last_page(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = self.total_pages
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.get_current_page_embed(), view=self)
+
+    async def on_timeout(self):
+        # Remove buttons when the view times out
+        for item in self.children:
+            item.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except:
+            pass
+
+def format_title(title: str) -> str:
+    """Format a title to look nicer with proper capitalization."""
+    # Words that should not be capitalized (unless they're at the start)
+    small_words = {'a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'of', 'on', 
+                  'or', 'the', 'to', 'with', 'yet'}
+    
+    words = title.strip().split()
+    if not words:
+        return title
+    
+    # Capitalize the first word regardless of what it is
+    formatted_words = [words[0].capitalize()]
+    
+    # Process the rest of the words
+    for word in words[1:]:
+        # Check if it's a small word
+        if word.lower() in small_words:
+            formatted_words.append(word.lower())
+        # If it contains periods (like "S.H.I.E.L.D."), keep it as is
+        elif '.' in word:
+            formatted_words.append(word.upper())
+        # Special case for "and" in "TV" strings
+        elif word.lower() == 'tv':
+            formatted_words.append('TV')
+        else:
+            formatted_words.append(word.capitalize())
+    
+    return ' '.join(formatted_words)
+
+@bot.tree.command(name="watchlist")
+@app_commands.describe(page="Page number to view (default: 1)")
+async def show_watchlist(interaction: discord.Interaction, page: int = 1):
+    """Shows the current watchlist with status indicators"""
+    # Check if command is used in the correct server
+    if interaction.guild_id != WATCHLIST_SERVER_ID:
+        await interaction.response.send_message("This command can only be used in the designated server.", ephemeral=True)
+        return
+
+    channel = bot.get_channel(WATCHLIST_CHANNEL_ID)
+    if not channel:
+        await interaction.response.send_message("Watchlist channel not found.", ephemeral=True)
+        return
+
+    # Collect all watchlist items
+    watchlist_items = []
+    async for message in channel.history(limit=None):
+        status = "📝 Not Started"  # Default status
+        
+        # Check reactions on the message
+        for reaction in message.reactions:
+            if str(reaction.emoji) == WATCHED_EMOJI:
+                status = "✅ Watched"
+                break
+            elif str(reaction.emoji) == IN_PROGRESS_EMOJI:
+                status = "🟨 In Progress"
+                break
+            elif str(reaction.emoji) == NO_EMOJI:
+                status = "❌ No"
+                break
+        
+        # Format the title before adding to the list
+        formatted_title = format_title(message.content)
+        watchlist_items.append((formatted_title, status))
+
+    # Sort items by status (Watched -> In Progress -> Not Started)
+    watchlist_items.sort(key=lambda x: (
+        "0" if x[1] == "✅ Watched" else
+        "1" if x[1] == "🟨 In Progress" else
+        "2"
+    ))
+
+    if not watchlist_items:
+        await interaction.response.send_message("No items in the watchlist yet!", ephemeral=True)
+        return
+
+    # Create view with navigation buttons
+    view = WatchlistView(watchlist_items, page)
+    
+    # Send initial embed with view
+    initial_message = await interaction.response.send_message(embed=view.get_current_page_embed(), view=view)
+    # Store the message for timeout handling
+    view.message = await interaction.original_response()
+
+
+# ================================
+# ========= COUNTUP TIMER ========
+# ================================
+
+# Store active timers to manage cleanup
+active_timers = {}
+
+# Our anniversary datetime
+ANNIVERSARY_START = datetime(2025, 8, 2, 7, 40, 0)  # 2025-08-02 07:40:00
+
+def compute_time_together(start_date: datetime):
+    """Return a dict with years, months, days, hours, minutes, seconds between start_date and now."""
+    now = datetime.now()
+
+    years = now.year - start_date.year
+    months = now.month - start_date.month
+    days = now.day - start_date.day
+    hours = now.hour - start_date.hour
+    minutes = now.minute - start_date.minute
+    seconds = now.second - start_date.second
+
+    # Adjust negatives by borrowing
+    if seconds < 0:
+        seconds += 60
+        minutes -= 1
+    if minutes < 0:
+        minutes += 60
+        hours -= 1
+    if hours < 0:
+        hours += 24
+        days -= 1
+    if days < 0:
+        # borrow days from previous month
+        prev_month = now.month - 1 or 12
+        prev_year = now.year if now.month != 1 else now.year - 1
+        days_in_prev = calendar.monthrange(prev_year, prev_month)[1]
+        days += days_in_prev
+        months -= 1
+    if months < 0:
+        months += 12
+        years -= 1
+
+    return {
+        "years": years,
+        "months": months,
+        "days": days,
+        "hours": hours,
+        "minutes": minutes,
+        "seconds": seconds,
+    }
+
+def make_countup_embed(start_date: datetime):
+    vals = compute_time_together(start_date)
+    embed = Embed(title="💝 Time Together 💝", color=0xFF1493)  # Hot pink color like your website
+    
+    # Create a layout that mimics your website's timeBox design
+    time_display = [
+        "```",
+        "╭──────────────────────────────────────╮",
+        "│                                      │",
+        "│     Years   Months   Days   Hours    │",
+        "│    ╭────╮  ╭────╮  ╭────╮  ╭────╮   │",
+        f"│    │ {str(vals['years']).zfill(2)} │  │ {str(vals['months']).zfill(2)} │  │ {str(vals['days']).zfill(2)} │  │ {str(vals['hours']).zfill(2)} │   │",
+        "│    ╰────╯  ╰────╯  ╰────╯  ╰────╯   │",
+        "│                                      │",
+        "│         Minutes    Seconds           │",
+        "│         ╭────╮    ╭────╮           │",
+        f"│         │ {str(vals['minutes']).zfill(2)} │    │ {str(vals['seconds']).zfill(2)} │           │",
+        "│         ╰────╯    ╰────╯           │",
+        "│                                      │",
+        "╰──────────────────────────────────────╯",
+        "```"
+    ]
+    
+    embed.description = "\n".join(time_display)
+    if WEBSITE_URL:
+        embed.set_footer(text=f"Website: {WEBSITE_URL}")
+    return embed
+
+
+class LiveCountupView(View):
+    def __init__(self, start_date: datetime):
+        super().__init__(timeout=None)
+        self.start_date = start_date
+        self.message = None
+        self.update_task = None
+
+    async def start_timer(self):
+        """Start the automatic update task"""
+        self.update_task = asyncio.create_task(self.update_timer())
+
+    async def update_timer(self):
+        """Updates the timer every second"""
+        try:
+            while True:
+                if self.message:
+                    await self.message.edit(embed=make_countup_embed(self.start_date))
+                await asyncio.sleep(1)  # Update every second
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logging.error(f"Error in timer update: {e}")
+
+    def stop_timer(self):
+        """Stop the automatic updates"""
+        if self.update_task:
+            self.update_task.cancel()
+
+    async def on_timeout(self):
+        """Handles cleanup when the view times out"""
+        self.stop_timer()
+        try:
+            if self.message:
+                await self.message.edit(view=None)  # Remove the view from the message
+        except:
+            pass
+
+
+@bot.event
+async def on_message_delete(message):
+    """Handle cleanup when a timer message is deleted"""
+    if message.id in active_timers:
+        view = active_timers[message.id]
+        view.stop_timer()
+        del active_timers[message.id]
+
+@bot.event
+async def on_close():
+    """Clean up all active timers when the bot shuts down"""
+    for view in active_timers.values():
+        view.stop_timer()
+    active_timers.clear()
+
+@bot.tree.command(name="together")
+async def together(interaction: discord.Interaction):
+    """See how long we been goosin around"""
+    if interaction.guild_id != WATCHLIST_SERVER_ID:
+        await interaction.response.send_message("This command can only be used in the designated server.", ephemeral=True)
+        return
+
+    view = LiveCountupView(ANNIVERSARY_START)
+    await interaction.response.send_message(embed=make_countup_embed(ANNIVERSARY_START), view=view)
+    # Store the message reference and start the timer
+    view.message = await interaction.original_response()
+    await view.start_timer()
+    # Store the timer for cleanup
+    active_timers[view.message.id] = view
+# Test function to check time calculation
+def test_time_together():
+    start_date = datetime(2025, 8, 2, 7, 40, 0)
+    time_vals = compute_time_together(start_date)
+    print("\n💖 Time Together Test 💖")
+    print("=" * 40)
+    print(f"Start Date: 2025-08-02 07:40:00")
+    print(f"Current Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 40)
+    print(f"✨ Years: {time_vals['years']}")
+    print(f"💫 Months: {time_vals['months']}")
+    print(f"🌸 Days: {time_vals['days']}")
+    print(f"💖 Hours: {time_vals['hours']}")
+    print(f"💕 Minutes: {time_vals['minutes']}")
+    print(f"💗 Seconds: {time_vals['seconds']}")
+    print("=" * 40)
+
+if __name__ == "__main__":
+    # Run the test if run directly
+    if os.getenv('TEST_MODE') == 'true':
+        test_time_together()
+    else:
+        # Initialize watchlist cache file
+        if not os.path.exists('watchlist_cache.json'):
+            with open('watchlist_cache.json', 'w') as f:
+                json.dump({"success": True, "count": 0, "items": []}, f)
+
+        # Start Flask API server in a background thread
+        app = Flask(__name__)
+        CORS(app)
+
+        @app.route('/api/watchlist', methods=['GET'])
+        def get_watchlist():
+            """Returns the cached watchlist data"""
+            try:
+                if os.path.exists('watchlist_cache.json'):
+                    with open('watchlist_cache.json', 'r') as f:
+                        return jsonify(json.load(f))
+                else:
+                    return jsonify({"success": False, "error": "Cache file not found"}), 404
+            except Exception as e:
+                logging.error(f"Error reading watchlist cache: {e}")
+                return jsonify({"error": str(e)}), 500
+
+        def run_flask():
+            """Run Flask app on port 5000"""
+            app.run(host='0.0.0.0', port=5000, debug=False)
+
+        # Start Flask in a background thread
+        flask_thread = Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        
+        # Run the Discord bot
+        bot.run(TOKEN)
